@@ -4,38 +4,47 @@ import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getMyRoleOrThrow } from "@/lib/getRole";
 
+function isSessionMissingMessage(message: string | undefined): boolean {
+  return typeof message === "string" && message.includes("Auth session missing");
+}
+
 export default function QrClient() {
   const router = useRouter();
   const sp = useSearchParams();
 
   useEffect(() => {
     const run = async () => {
-      const studentId = sp.get("studentId");
-      if (!studentId) {
+      const studentProfileId = sp.get("studentProfileId");
+
+      if (!studentProfileId) {
         router.replace("/login");
         return;
       }
 
-      // まずログイン済みか確認
+      const nextPath = `/instructor/student/${encodeURIComponent(studentProfileId)}`;
+
       try {
         const { role } = await getMyRoleOrThrow();
 
-        // instructor/adminなら生徒編集ページへ
         if (role === "instructor" || role === "admin") {
-          router.replace(`/instructor/student/${encodeURIComponent(studentId)}`);
+          router.replace(nextPath);
           return;
         }
 
-        // studentが開いた場合は自分のdashboardへ
         router.replace("/dashboard");
-      } catch {
-        // 未ログインなら login に「戻り先」を付けて飛ばす
-        const next = `/instructor/student/${encodeURIComponent(studentId)}`;
-        router.replace(`/login?next=${encodeURIComponent(next)}`);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+
+        if (isSessionMissingMessage(msg)) {
+          router.replace(`/login?next=${encodeURIComponent(nextPath)}`);
+          return;
+        }
+
+        router.replace(`/login?next=${encodeURIComponent(nextPath)}`);
       }
     };
 
-    run();
+    void run();
   }, [router, sp]);
 
   return (

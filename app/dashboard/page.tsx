@@ -465,7 +465,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
-              <span>role: {myRole ?? "-"}</span>
+              {/* <span>role: {myRole ?? "-"}</span> */}
               <span>owner: {myNameRomaji || "-"}</span>
               <span>student: {selectedStudent?.name_romaji ?? "-"}</span>
             </div>

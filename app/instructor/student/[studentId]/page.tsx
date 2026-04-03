@@ -8,14 +8,21 @@ type AppRole = "student" | "instructor" | "admin" | null;
 
 type StepRow = { id: string; name: string; sort_order: number | null };
 type CategoryRow = { id: string; step_id: string; name: string; sort_order: number | null };
-type CheckItemRow = { id: string; category_id: string; title: string; sort_order: number | null };
+type CheckItemRow = {
+  id: string;
+  category_id: string;
+  title: string;
+  sort_order: number | null;
+  video_url?: string | null;
+};
 
 type UserItemCheckRow = {
   item_id: string;
-  user_id: string; // 生徒
+  user_id: string;
+  student_profile_id: string | null;
   is_cleared: boolean;
   cleared_at: string | null;
-  cleared_by: string | null; // 更新した人（instructor/admin）
+  cleared_by: string | null;
 };
 
 type ProfileRow = {
@@ -24,13 +31,28 @@ type ProfileRow = {
   role?: AppRole;
 };
 
+type StudentProfileRow = {
+  id: string;
+  owner_user_id: string;
+  name_romaji: string;
+  sort_order: number;
+  created_at?: string;
+};
+
 type ViewItem = CheckItemRow & {
   status?: UserItemCheckRow;
   actorName?: string;
 };
 
-type ViewCategory = CategoryRow & { items: ViewItem[] };
+type ViewCategory = CategoryRow & { items: ViewItem[]; progressPct: number };
 type ViewStep = StepRow & { categories: ViewCategory[] };
+
+function clampPct(n: number) {
+  if (Number.isNaN(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return Math.round(n);
+}
 
 export default function InstructorStudentPage() {
   const router = useRouter();
@@ -50,17 +72,17 @@ export default function InstructorStudentPage() {
   const [myRole, setMyRole] = useState<AppRole>(null);
   const canEdit = myRole === "instructor" || myRole === "admin";
 
-  // 生徒の表示名
   const [studentNameRomaji, setStudentNameRomaji] = useState<string>("");
+  const [studentOwnerUserId, setStudentOwnerUserId] = useState<string>("");
 
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [items, setItems] = useState<CheckItemRow[]>([]);
   const [checks, setChecks] = useState<UserItemCheckRow[]>([]);
-  const [profiles, setProfiles] = useState<ProfileRow[]>([]); // cleared_by の表示名用
+  const [profiles, setProfiles] = useState<ProfileRow[]>([]);
 
-  // ✅ 追加：カテゴリ開閉状態
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
+  const toggleCat = (catId: string) => setOpenCats((prev) => ({ ...prev, [catId]: !prev[catId] }));
 
   useEffect(() => {
     const fail = (msg: string) => {
@@ -77,7 +99,6 @@ export default function InstructorStudentPage() {
         return;
       }
 
-      // 1) ログインチェック
       const { data: userData, error: userErr } = await supabase.auth.getUser();
 
       const isSessionMissing =
@@ -100,7 +121,7 @@ export default function InstructorStudentPage() {
 
       const actorId = userData.user.id;
 
-      // 2) 自分のrole取得
+      // 自分の role
       const { data: myProf, error: myProfErr } = await supabase
         .from("profiles")
         .select("role")
@@ -115,34 +136,42 @@ export default function InstructorStudentPage() {
       const role = (myProf?.role ?? "student") as AppRole;
       setMyRole(role);
 
-      // instructor/admin以外は入れない
       if (!(role === "instructor" || role === "admin")) {
         router.replace("/dashboard");
         return;
       }
 
-      // 3) 生徒の name_romaji を取得（ヘッダー用）
-      const { data: stProf, error: stErr } = await supabase
-        .from("profiles")
-        .select("user_id,name_romaji")
-        .eq("user_id", studentId)
-        .maybeSingle<ProfileRow>();
+      // student_profile 本体取得
+      const { data: studentProf, error: studentProfErr } = await supabase
+        .from("student_profiles")
+        .select("id,owner_user_id,name_romaji,sort_order,created_at")
+        .eq("id", studentId)
+        .maybeSingle<StudentProfileRow>();
 
-      if (stErr) {
-        setStudentNameRomaji("");
-      } else {
-        setStudentNameRomaji((stProf?.name_romaji ?? "").trim());
+      if (studentProfErr) {
+        fail(studentProfErr.message);
+        return;
       }
 
-      // 4) データ取得（ターゲット = studentId）
+      if (!studentProf) {
+        fail("student profile が見つかりません");
+        return;
+      }
+
+      setStudentNameRomaji(studentProf.name_romaji);
+      setStudentOwnerUserId(studentProf.owner_user_id);
+
       const [stepsRes, categoriesRes, itemsRes, checksRes] = await Promise.all([
         supabase.from("steps").select("id,name,sort_order").order("sort_order", { ascending: true }),
         supabase.from("categories").select("id,step_id,name,sort_order").order("sort_order", { ascending: true }),
-        supabase.from("check_items").select("id,category_id,title,sort_order").order("sort_order", { ascending: true }),
+        supabase
+          .from("check_items")
+          .select("id,category_id,title,sort_order,video_url")
+          .order("sort_order", { ascending: true }),
         supabase
           .from("user_item_checks")
-          .select("item_id,user_id,is_cleared,cleared_at,cleared_by")
-          .eq("user_id", studentId),
+          .select("item_id,user_id,student_profile_id,is_cleared,cleared_at,cleared_by")
+          .eq("student_profile_id", studentId),
       ]);
 
       if (stepsRes.error) return fail(stepsRes.error.message);
@@ -157,9 +186,12 @@ export default function InstructorStudentPage() {
       setItems((itemsRes.data ?? []) as CheckItemRow[]);
       setChecks(checksData);
 
-      // 5) cleared_by のユーザー名を引く（重複除去してまとめて取得）
       const actorIds = Array.from(
-        new Set(checksData.map((c) => c.cleared_by).filter((v): v is string => typeof v === "string" && v.length > 0))
+        new Set(
+          checksData
+            .map((c) => c.cleared_by)
+            .filter((v): v is string => typeof v === "string" && v.length > 0)
+        )
       );
 
       if (actorIds.length > 0) {
@@ -179,6 +211,64 @@ export default function InstructorStudentPage() {
 
     init();
   }, [router, studentId]);
+
+  // realtime
+  useEffect(() => {
+    if (!studentId) return;
+
+    const channel = supabase
+      .channel(`uic-instructor-student-${studentId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_item_checks",
+          filter: `student_profile_id=eq.${studentId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as Partial<UserItemCheckRow>;
+            if (!oldRow.item_id || !oldRow.student_profile_id) return;
+
+            setChecks((prev) =>
+              prev.filter(
+                (c) =>
+                  !(
+                    c.item_id === oldRow.item_id &&
+                    c.student_profile_id === oldRow.student_profile_id
+                  )
+              )
+            );
+            return;
+          }
+
+          const newRow = payload.new as Partial<UserItemCheckRow>;
+          if (!newRow.item_id || !newRow.student_profile_id) return;
+
+          setChecks((prev) => {
+            const idx = prev.findIndex(
+              (c) =>
+                c.item_id === newRow.item_id &&
+                c.student_profile_id === newRow.student_profile_id
+            );
+
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], ...(newRow as UserItemCheckRow) };
+              return next;
+            }
+
+            return [...prev, newRow as UserItemCheckRow];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [studentId]);
 
   const actorMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -204,18 +294,18 @@ export default function InstructorStudentPage() {
 
     const categoriesByStep = new Map<string, ViewCategory[]>();
     for (const cat of categories) {
+      const categoryItems = itemsByCategory.get(cat.id) ?? [];
+      const total = categoryItems.length;
+      const cleared = categoryItems.filter((x) => x.status?.is_cleared === true).length;
+      const pct = total === 0 ? 0 : clampPct((cleared / total) * 100);
+
       const list = categoriesByStep.get(cat.step_id) ?? [];
-      list.push({ ...cat, items: itemsByCategory.get(cat.id) ?? [] });
+      list.push({ ...cat, items: categoryItems, progressPct: pct });
       categoriesByStep.set(cat.step_id, list);
     }
 
     return steps.map((st) => ({ ...st, categories: categoriesByStep.get(st.id) ?? [] }));
   }, [steps, categories, items, checks, actorMap]);
-
-  // ✅ 追加：カテゴリ開閉の切り替え
-  const toggleCat = (catId: string) => {
-    setOpenCats((prev) => ({ ...prev, [catId]: !prev[catId] }));
-  };
 
   const toggleClear = async (itemId: string, nextCleared: boolean) => {
     if (!canEdit) return;
@@ -226,6 +316,7 @@ export default function InstructorStudentPage() {
       setErrorMsg(userErr.message);
       return;
     }
+
     if (!userData.user) {
       const nextPath = `/instructor/student/${encodeURIComponent(studentId)}`;
       router.replace(`/login?next=${encodeURIComponent(nextPath)}`);
@@ -236,26 +327,34 @@ export default function InstructorStudentPage() {
     const prevChecks = checks;
 
     const nextRow: UserItemCheckRow = {
-      user_id: studentId,
+      user_id: studentOwnerUserId,
+      student_profile_id: studentId,
       item_id: itemId,
       is_cleared: nextCleared,
-      cleared_at: new Date().toISOString(),
-      cleared_by: instructorId,
+      cleared_at: nextCleared ? new Date().toISOString() : null,
+      cleared_by: nextCleared ? instructorId : null,
     };
 
-    // Optimistic
     setChecks((prev) => {
-      const exists = prev.find((c) => c.item_id === itemId && c.user_id === studentId);
+      const exists = prev.find(
+        (c) => c.item_id === itemId && c.student_profile_id === studentId
+      );
+
       if (exists) {
-        return prev.map((c) => (c.item_id === itemId && c.user_id === studentId ? { ...c, ...nextRow } : c));
+        return prev.map((c) =>
+          c.item_id === itemId && c.student_profile_id === studentId
+            ? { ...c, ...nextRow }
+            : c
+        );
       }
+
       return [...prev, nextRow];
     });
 
     const { data, error } = await supabase
       .from("user_item_checks")
-      .upsert(nextRow, { onConflict: "user_id,item_id" })
-      .select("item_id,user_id,is_cleared,cleared_at,cleared_by")
+      .upsert(nextRow, { onConflict: "student_profile_id,item_id" })
+      .select("item_id,user_id,student_profile_id,is_cleared,cleared_at,cleared_by")
       .single();
 
     if (error) {
@@ -266,7 +365,19 @@ export default function InstructorStudentPage() {
 
     if (data) {
       const row = data as UserItemCheckRow;
-      setChecks((prev) => prev.map((c) => (c.item_id === row.item_id && c.user_id === row.user_id ? row : c)));
+      setChecks((prev) => {
+        const idx = prev.findIndex(
+          (c) => c.item_id === row.item_id && c.student_profile_id === row.student_profile_id
+        );
+
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = row;
+          return next;
+        }
+
+        return [...prev, row];
+      });
 
       if (row.cleared_by && !actorMap.has(row.cleared_by)) {
         const { data: p } = await supabase
@@ -275,14 +386,16 @@ export default function InstructorStudentPage() {
           .eq("user_id", row.cleared_by)
           .maybeSingle<ProfileRow>();
 
-        if (p?.user_id) setProfiles((prev) => [...prev, p]);
+        if (p?.user_id) {
+          setProfiles((prev) => [...prev, p]);
+        }
       }
     }
   };
 
   if (loading) {
     return (
-      <main className="min-h-[100dvh] bg-black text-white p-4">
+      <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
         <p>読み込み中...</p>
       </main>
     );
@@ -290,11 +403,11 @@ export default function InstructorStudentPage() {
 
   if (errorMsg) {
     return (
-      <main className="min-h-[100dvh] bg-black text-white p-4">
+      <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
         <p className="text-red-400">エラー: {errorMsg}</p>
         <button
           onClick={() => router.replace("/instructor")}
-          className="mt-4 w-full px-4 py-3 bg-gray-700 rounded-xl"
+          className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3"
         >
           インストラクターホームへ
         </button>
@@ -303,70 +416,92 @@ export default function InstructorStudentPage() {
   }
 
   return (
-    <main className="min-h-[100dvh] bg-black text-white p-4">
-      {/* ヘッダー（スマホ向け） */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold">Student Dashboard</h1>
-          <div className="text-sm text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
-            <span className="break-all">studentId: {studentId}</span>
-            {studentNameRomaji ? <span>name: {studentNameRomaji}</span> : <span className="text-gray-600">name: -</span>}
-          </div>
-        </div>
+    <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
+      <div className="mb-5 rounded-[1.618rem] border border-gray-800 bg-gray-950/70 px-4 py-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <p className="text-[0.72rem] uppercase tracking-[0.22em] text-gray-500">
+                Instructor View
+              </p>
+              <h1 className="text-[1.9rem] leading-none font-bold">Student Dashboard</h1>
+            </div>
 
-        <button
-          onClick={() => router.replace("/instructor")}
-          className="w-full sm:w-auto px-4 py-2.5 bg-gray-700 rounded-xl"
-        >
-          戻る
-        </button>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
+              <span>student: {studentNameRomaji || "-"}</span>
+              <span className="break-all">student_profile_id: {studentId}</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => router.replace("/instructor")}
+            className="rounded-2xl bg-gray-700 px-4 py-2.5 text-sm font-medium transition hover:bg-gray-600"
+          >
+            戻る
+          </button>
+        </div>
       </div>
 
-      {/* 本体（カテゴリをタップで開閉） */}
       <div className="space-y-6">
         {viewData.map((step) => (
-          <section key={step.id} className="border border-gray-800 rounded-xl p-4">
-            <h2 className="text-xl font-semibold mb-3">{step.name}</h2>
+          <section
+            key={step.id}
+            className="rounded-[1.618rem] border border-gray-800 bg-gray-950/55 px-4 py-4"
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-[1.35rem] font-semibold tracking-tight">{step.name}</h2>
+            </div>
 
             {step.categories.length === 0 ? (
               <p className="text-gray-400">このStepにカテゴリがありません</p>
             ) : (
-              <div className="space-y-5">
+              <div className="space-y-4">
                 {step.categories.map((cat) => {
                   const isOpen = !!openCats[cat.id];
 
                   return (
-                    <div key={cat.id} className="bg-gray-900/40 rounded-xl p-4">
-                      {/* ✅ カテゴリ名をボタン化（タップで開閉） */}
+                    <div
+                      key={cat.id}
+                      className="rounded-[1.272rem] border border-gray-800/90 bg-gray-900/45 px-4 py-4"
+                    >
                       <button
                         type="button"
                         onClick={() => toggleCat(cat.id)}
-                        className="w-full flex items-center justify-between gap-3 text-left"
+                        className="flex w-full items-center justify-between gap-3 text-left"
                       >
-                        <h3 className="text-lg font-semibold">{cat.name}</h3>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <h3 className="truncate text-[1.06rem] font-semibold">{cat.name}</h3>
+                          <span className="rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
+                            {cat.progressPct}%
+                          </span>
+                        </div>
                         <span className="text-sm text-gray-400">{isOpen ? "▲" : "▼"}</span>
                       </button>
 
-                      {/* ✅ 開いてる時だけ items を表示 */}
                       {isOpen && (
-                        <div className="mt-3">
+                        <div className="mt-4">
                           {cat.items.length === 0 ? (
                             <p className="text-gray-400">このカテゴリに項目がありません</p>
                           ) : (
-                            <ul className="space-y-2">
+                            <ul className="space-y-3">
                               {cat.items.map((it) => {
                                 const cleared = it.status?.is_cleared === true;
 
                                 return (
-                                  <li key={it.id} className="border border-gray-800 rounded-xl px-4 py-3">
-                                    <div className="text-base leading-relaxed font-medium whitespace-pre-wrap">
+                                  <li
+                                    key={it.id}
+                                    className="rounded-[1rem] border border-gray-800 bg-black/25 px-4 py-4"
+                                  >
+                                    <div className="text-[1rem] leading-[1.62] font-medium whitespace-pre-wrap">
                                       {it.title}
                                     </div>
 
-                                    <div className="mt-2 flex items-center justify-between gap-2">
+                                    <div className="mt-3 flex items-center justify-between gap-3">
                                       <span
-                                        className={`text-sm px-3 py-1.5 rounded-lg border ${
-                                          cleared ? "text-green-400 border-green-600" : "text-gray-300 border-gray-600"
+                                        className={`rounded-full border px-3 py-1.5 text-sm ${
+                                          cleared
+                                            ? "border-green-600 text-green-400"
+                                            : "border-gray-600 text-gray-300"
                                         }`}
                                       >
                                         {cleared ? "✅ クリア" : "⬜ 未クリア"}
@@ -375,9 +510,9 @@ export default function InstructorStudentPage() {
                                       <button
                                         disabled={!canEdit}
                                         onClick={() => toggleClear(it.id, !cleared)}
-                                        className={`px-4 py-2 rounded-xl text-sm font-semibold ${
+                                        className={`rounded-2xl px-4 py-2 text-sm font-medium ${
                                           cleared ? "bg-gray-800" : "bg-blue-600"
-                                        } ${!canEdit ? "opacity-50 cursor-not-allowed" : ""}`}
+                                        } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
                                       >
                                         {cleared ? "未クリアに戻す" : "クリアにする"}
                                       </button>
