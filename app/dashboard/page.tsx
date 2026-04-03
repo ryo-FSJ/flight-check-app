@@ -10,7 +10,6 @@ type AppRole = "student" | "instructor" | "admin" | null;
 type StepRow = { id: string; name: string; sort_order: number | null };
 type CategoryRow = { id: string; step_id: string; name: string; sort_order: number | null };
 
-// ✅ video_url を追加
 type CheckItemRow = {
   id: string;
   category_id: string;
@@ -22,6 +21,7 @@ type CheckItemRow = {
 type UserItemCheckRow = {
   item_id: string;
   user_id: string;
+  student_profile_id: string | null;
   is_cleared: boolean;
   cleared_at: string | null;
   cleared_by: string | null;
@@ -33,9 +33,15 @@ type ProfileRow = {
   name_romaji: string | null;
 };
 
-type ViewItem = CheckItemRow & { status?: UserItemCheckRow };
+type StudentProfileRow = {
+  id: string;
+  owner_user_id: string;
+  name_romaji: string;
+  sort_order: number;
+  created_at?: string;
+};
 
-// ✅ progress を持たせる
+type ViewItem = CheckItemRow & { status?: UserItemCheckRow };
 type ViewCategory = CategoryRow & { items: ViewItem[]; progressPct: number };
 type ViewStep = StepRow & { categories: ViewCategory[] };
 
@@ -46,14 +52,12 @@ function clampPct(n: number) {
   return Math.round(n);
 }
 
-// ✅ YouTube URL → embed URL に変換（YouTube以外は弾く）
 function toYoutubeEmbedUrl(raw: string): string | null {
   const s = (raw ?? "").trim();
   if (!s) return null;
 
   try {
     const u = new URL(s);
-
     const host = u.hostname.replace(/^www\./, "");
     const isYoutube =
       host === "youtube.com" ||
@@ -63,29 +67,22 @@ function toYoutubeEmbedUrl(raw: string): string | null {
 
     if (!isYoutube) return null;
 
-    // youtu.be/<id>
     if (host === "youtu.be") {
       const id = u.pathname.split("/").filter(Boolean)[0];
-      if (!id) return null;
-      return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}`;
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
     }
 
-    // youtube.com/watch?v=<id>
     const v = u.searchParams.get("v");
     if (v) return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(v)}`;
 
-    // youtube.com/embed/<id>
     if (u.pathname.startsWith("/embed/")) {
       const id = u.pathname.split("/")[2];
-      if (!id) return null;
-      return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}`;
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
     }
 
-    // youtube.com/shorts/<id>
     if (u.pathname.startsWith("/shorts/")) {
       const id = u.pathname.split("/")[2];
-      if (!id) return null;
-      return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}`;
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
     }
 
     return null;
@@ -101,26 +98,39 @@ export default function DashboardPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const [myRole, setMyRole] = useState<AppRole>(null);
-  const [myNameRomaji, setMyNameRomaji] = useState<string>("");
+  const [myNameRomaji, setMyNameRomaji] = useState("");
+
+  const [ownerUserId, setOwnerUserId] = useState("");
+  const [students, setStudents] = useState<StudentProfileRow[]>([]);
+  const [selectedStudentId, setSelectedStudentId] = useState("");
 
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [items, setItems] = useState<CheckItemRow[]>([]);
   const [checks, setChecks] = useState<UserItemCheckRow[]>([]);
 
-  // QRモーダル
-  const [showQr, setShowQr] = useState(false);
-  const [studentId, setStudentId] = useState<string>("");
-
-  // ✅ カテゴリ開閉（前回追加したのと同じ思想）
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
   const toggleCat = (catId: string) => setOpenCats((p) => ({ ...p, [catId]: !p[catId] }));
 
-  // ✅ 動画モーダル
+  const [showQr, setShowQr] = useState(false);
+  const [copyMsg, setCopyMsg] = useState("");
+
   const [showVideo, setShowVideo] = useState(false);
-  const [videoTitle, setVideoTitle] = useState<string>("");
+  const [videoTitle, setVideoTitle] = useState("");
   const [videoEmbedUrl, setVideoEmbedUrl] = useState<string | null>(null);
-  const [videoMsg, setVideoMsg] = useState<string>("");
+  const [videoMsg, setVideoMsg] = useState("");
+
+  const [showStudentSwitcher, setShowStudentSwitcher] = useState(false);
+  const [showAddStudent, setShowAddStudent] = useState(false);
+  const [newStudentName, setNewStudentName] = useState("");
+  const [newStudentInviteCode, setNewStudentInviteCode] = useState("");
+  const [addStudentMsg, setAddStudentMsg] = useState("");
+  const [addingStudent, setAddingStudent] = useState(false);
+
+  const selectedStudent = useMemo(
+    () => students.find((s) => s.id === selectedStudentId) ?? null,
+    [students, selectedStudentId]
+  );
 
   const openVideo = (title: string, url?: string | null) => {
     setVideoMsg("");
@@ -150,19 +160,16 @@ export default function DashboardPage() {
       setLoading(true);
       setErrorMsg("");
 
-      // 1) ログインチェック
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr) return fail(userErr.message);
-
       if (!userData.user) {
         router.replace("/login");
         return;
       }
 
       const userId = userData.user.id;
-      setStudentId(userId);
+      setOwnerUserId(userId);
 
-      // 2) role + name_romaji 取得
       const { data: prof, error: profErr } = await supabase
         .from("profiles")
         .select("user_id,role,name_romaji")
@@ -175,36 +182,40 @@ export default function DashboardPage() {
       setMyRole(role);
       setMyNameRomaji((prof?.name_romaji ?? "").trim());
 
-      // instructor/admin が /dashboard に来たら /instructor へ
       if (role === "instructor" || role === "admin") {
         router.replace("/instructor");
         return;
       }
 
-      // 3) データ取得（自分の進捗だけ）
-      const [stepsRes, categoriesRes, itemsRes, checksRes] = await Promise.all([
+      const [studentsRes, stepsRes, categoriesRes, itemsRes] = await Promise.all([
+        supabase
+          .from("student_profiles")
+          .select("id,owner_user_id,name_romaji,sort_order,created_at")
+          .eq("owner_user_id", userId)
+          .order("sort_order", { ascending: true }),
         supabase.from("steps").select("id,name,sort_order").order("sort_order", { ascending: true }),
         supabase.from("categories").select("id,step_id,name,sort_order").order("sort_order", { ascending: true }),
-        // ✅ video_url も取る
         supabase
           .from("check_items")
           .select("id,category_id,title,sort_order,video_url")
           .order("sort_order", { ascending: true }),
-        supabase
-          .from("user_item_checks")
-          .select("item_id,user_id,is_cleared,cleared_at,cleared_by")
-          .eq("user_id", userId),
       ]);
 
+      if (studentsRes.error) return fail(studentsRes.error.message);
       if (stepsRes.error) return fail(stepsRes.error.message);
       if (categoriesRes.error) return fail(categoriesRes.error.message);
       if (itemsRes.error) return fail(itemsRes.error.message);
-      if (checksRes.error) return fail(checksRes.error.message);
+
+      const studentList = (studentsRes.data ?? []) as StudentProfileRow[];
+      setStudents(studentList);
+
+      const firstStudent = studentList[0];
+      if (!firstStudent) return fail("student profile が見つかりません");
+      setSelectedStudentId(firstStudent.id);
 
       setSteps((stepsRes.data ?? []) as StepRow[]);
       setCategories((categoriesRes.data ?? []) as CategoryRow[]);
       setItems((itemsRes.data ?? []) as CheckItemRow[]);
-      setChecks((checksRes.data ?? []) as UserItemCheckRow[]);
 
       setLoading(false);
     };
@@ -212,7 +223,83 @@ export default function DashboardPage() {
     init();
   }, [router]);
 
-  // 表示用に組み立て（progressPct もここで計算）
+  useEffect(() => {
+    if (!selectedStudentId) return;
+
+    const loadChecks = async () => {
+      const { data, error } = await supabase
+        .from("user_item_checks")
+        .select("item_id,user_id,student_profile_id,is_cleared,cleared_at,cleared_by")
+        .eq("student_profile_id", selectedStudentId);
+
+      if (error) {
+        setErrorMsg(error.message);
+        return;
+      }
+
+      setChecks((data ?? []) as UserItemCheckRow[]);
+    };
+
+    loadChecks();
+  }, [selectedStudentId]);
+
+  useEffect(() => {
+    if (!selectedStudentId) return;
+
+    const channel = supabase
+      .channel(`uic-student-${selectedStudentId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_item_checks",
+          filter: `student_profile_id=eq.${selectedStudentId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as Partial<UserItemCheckRow>;
+            if (!oldRow.item_id || !oldRow.student_profile_id) return;
+
+            setChecks((prev) =>
+              prev.filter(
+                (c) =>
+                  !(
+                    c.item_id === oldRow.item_id &&
+                    c.student_profile_id === oldRow.student_profile_id
+                  )
+              )
+            );
+            return;
+          }
+
+          const newRow = payload.new as Partial<UserItemCheckRow>;
+          if (!newRow.item_id || !newRow.student_profile_id) return;
+
+          setChecks((prev) => {
+            const idx = prev.findIndex(
+              (c) =>
+                c.item_id === newRow.item_id &&
+                c.student_profile_id === newRow.student_profile_id
+            );
+
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], ...(newRow as UserItemCheckRow) };
+              return next;
+            }
+
+            return [...prev, newRow as UserItemCheckRow];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [selectedStudentId]);
+
   const viewData: ViewStep[] = useMemo(() => {
     const checkMap = new Map<string, UserItemCheckRow>();
     for (const c of checks) checkMap.set(c.item_id, c);
@@ -244,10 +331,11 @@ export default function DashboardPage() {
       typeof window !== "undefined"
         ? window.location.origin
         : process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    return `${origin}/instructor/student/${encodeURIComponent(studentId)}`;
-  }, [studentId]);
 
-  const [copyMsg, setCopyMsg] = useState<string>("");
+    return selectedStudentId
+      ? `${origin}/instructor/student/${encodeURIComponent(selectedStudentId)}`
+      : `${origin}/instructor`;
+  }, [selectedStudentId]);
 
   const copyQrUrl = async () => {
     setCopyMsg("");
@@ -265,9 +353,85 @@ export default function DashboardPage() {
     router.replace("/login");
   };
 
+  const handleAddStudent = async () => {
+    setAddStudentMsg("");
+
+    const name = newStudentName.trim();
+    const invite = newStudentInviteCode.trim();
+
+    if (!ownerUserId) {
+      setAddStudentMsg("ログイン情報が見つかりません");
+      return;
+    }
+    if (!name) {
+      setAddStudentMsg("student名を入力してね");
+      return;
+    }
+    if (!invite) {
+      setAddStudentMsg("招待コードを入力してね");
+      return;
+    }
+    if (students.length >= 3) {
+      setAddStudentMsg("student は最大3人までです");
+      return;
+    }
+
+    setAddingStudent(true);
+
+    try {
+      const { data: isValid, error: validateErr } = await supabase.rpc(
+        "validate_signup_invite_code",
+        { p_code: invite }
+      );
+
+      if (validateErr) {
+        setAddStudentMsg(validateErr.message);
+        return;
+      }
+
+      if (!isValid) {
+        setAddStudentMsg("招待コードが正しくありません");
+        return;
+      }
+
+      const nextSortOrder =
+        students.length === 0
+          ? 1
+          : Math.max(...students.map((s) => s.sort_order)) + 1;
+
+      const { data: inserted, error: insertErr } = await supabase
+        .from("student_profiles")
+        .insert({
+          owner_user_id: ownerUserId,
+          name_romaji: name,
+          sort_order: nextSortOrder,
+        })
+        .select("id,owner_user_id,name_romaji,sort_order,created_at")
+        .single<StudentProfileRow>();
+
+      if (insertErr) {
+        setAddStudentMsg(insertErr.message);
+        return;
+      }
+
+      if (inserted) {
+        const nextStudents = [...students, inserted].sort(
+          (a, b) => a.sort_order - b.sort_order
+        );
+        setStudents(nextStudents);
+        setSelectedStudentId(inserted.id);
+        setNewStudentName("");
+        setNewStudentInviteCode("");
+        setShowAddStudent(false);
+      }
+    } finally {
+      setAddingStudent(false);
+    }
+  };
+
   if (loading) {
     return (
-      <main className="min-h-[100dvh] bg-black text-white p-4">
+      <main className="min-h-[100dvh] bg-black text-white px-4 py-6">
         <p>読み込み中...</p>
       </main>
     );
@@ -275,11 +439,11 @@ export default function DashboardPage() {
 
   if (errorMsg) {
     return (
-      <main className="min-h-[100dvh] bg-black text-white p-4">
+      <main className="min-h-[100dvh] bg-black text-white px-4 py-6">
         <p className="text-red-400">エラー: {errorMsg}</p>
         <button
           onClick={() => router.replace("/login")}
-          className="mt-4 w-full px-4 py-3 bg-gray-700 rounded-xl"
+          className="mt-4 w-full px-4 py-3 bg-gray-700 rounded-2xl"
         >
           ログインへ
         </button>
@@ -288,63 +452,90 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-[100dvh] bg-black text-white p-4">
-      {/* ヘッダー */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold">Dashboard</h1>
-          <div className="text-sm text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
-            <span>role: {myRole ?? "-"}</span>
-            {myNameRomaji ? <span>name: {myNameRomaji}</span> : <span className="text-gray-600">name: -</span>}
+    <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
+      {/* Header */}
+      <div className="mb-5 rounded-[1.618rem] border border-gray-800 bg-gray-950/70 px-4 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <p className="text-[0.72rem] uppercase tracking-[0.22em] text-gray-500">
+                Flight Check
+              </p>
+              <h1 className="text-[1.9rem] leading-none font-bold">Dashboard</h1>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
+              <span>role: {myRole ?? "-"}</span>
+              <span>owner: {myNameRomaji || "-"}</span>
+              <span>student: {selectedStudent?.name_romaji ?? "-"}</span>
+            </div>
+
+            {videoMsg && <p className="text-xs text-yellow-300">{videoMsg}</p>}
           </div>
 
-          {/* ✅ 動画の注意メッセージ（任意） */}
-          {videoMsg && <p className="text-xs text-yellow-300 mt-1">{videoMsg}</p>}
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowQr(true)}
-            className="flex-1 sm:flex-none px-4 py-2.5 bg-gray-700 rounded-xl"
-          >
-            QRを表示
-          </button>
-          <button
-            onClick={handleLogout}
-            className="flex-1 sm:flex-none px-4 py-2.5 bg-red-600 rounded-xl"
-          >
-            ログアウト
-          </button>
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+            <button
+              onClick={() => setShowStudentSwitcher(true)}
+              className="rounded-2xl bg-gray-800 px-4 py-2.5 text-sm font-medium transition hover:bg-gray-700"
+            >
+              切り替え
+            </button>
+            <button
+              onClick={() => setShowAddStudent(true)}
+              className="rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-medium transition hover:bg-indigo-500"
+            >
+              ＋追加
+            </button>
+            <button
+              onClick={() => setShowQr(true)}
+              className="rounded-2xl bg-gray-700 px-4 py-2.5 text-sm font-medium transition hover:bg-gray-600"
+            >
+              QRを表示
+            </button>
+            <button
+              onClick={handleLogout}
+              className="rounded-2xl bg-red-600 px-4 py-2.5 text-sm font-medium transition hover:bg-red-500"
+            >
+              ログアウト
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* 本体 */}
+      {/* Content */}
       {viewData.length === 0 ? (
         <p className="text-gray-300">データがありません（steps が空かも）</p>
       ) : (
         <div className="space-y-6">
           {viewData.map((step) => (
-            <section key={step.id} className="border border-gray-800 rounded-xl p-4">
-              <h2 className="text-xl font-semibold mb-3">{step.name}</h2>
+            <section
+              key={step.id}
+              className="rounded-[1.618rem] border border-gray-800 bg-gray-950/55 px-4 py-4"
+            >
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-[1.35rem] font-semibold tracking-tight">{step.name}</h2>
+              </div>
 
               {step.categories.length === 0 ? (
                 <p className="text-gray-400">このStepにカテゴリがありません</p>
               ) : (
-                <div className="space-y-5">
+                <div className="space-y-4">
                   {step.categories.map((cat) => {
                     const isOpen = !!openCats[cat.id];
 
                     return (
-                      <div key={cat.id} className="bg-gray-900/40 rounded-xl p-4">
-                        {/* ✅ カテゴリ：タップで開閉 + 進捗% */}
+                      <div
+                        key={cat.id}
+                        className="rounded-[1.272rem] border border-gray-800/90 bg-gray-900/45 px-4 py-4"
+                      >
                         <button
                           type="button"
                           onClick={() => toggleCat(cat.id)}
-                          className="w-full flex items-center justify-between gap-3 text-left"
+                          className="flex w-full items-center justify-between gap-3 text-left"
                         >
-                          <div className="flex items-center gap-3">
-                            <h3 className="text-lg font-semibold">{cat.name}</h3>
-                            <span className="text-xs px-2 py-1 rounded-lg border border-gray-700 text-gray-300">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <h3 className="truncate text-[1.06rem] font-semibold">{cat.name}</h3>
+                            <span className="rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
                               {cat.progressPct}%
                             </span>
                           </div>
@@ -352,23 +543,25 @@ export default function DashboardPage() {
                         </button>
 
                         {isOpen && (
-                          <div className="mt-3">
+                          <div className="mt-4">
                             {cat.items.length === 0 ? (
                               <p className="text-gray-400">このカテゴリに項目がありません</p>
                             ) : (
-                              <ul className="space-y-2">
+                              <ul className="space-y-3">
                                 {cat.items.map((it) => {
                                   const cleared = it.status?.is_cleared === true;
 
                                   return (
-                                    <li key={it.id} className="border border-gray-800 rounded-xl px-4 py-3">
-                                      {/* ✅ タイトルを押すと動画モーダル */}
+                                    <li
+                                      key={it.id}
+                                      className="rounded-[1rem] border border-gray-800 bg-black/25 px-4 py-4"
+                                    >
                                       <button
                                         type="button"
                                         onClick={() => openVideo(it.title, it.video_url)}
                                         className="w-full text-left"
                                       >
-                                        <div className="text-base leading-relaxed font-medium whitespace-pre-wrap underline underline-offset-4 decoration-gray-600">
+                                        <div className="text-[1rem] leading-[1.62] font-medium whitespace-pre-wrap underline underline-offset-4 decoration-gray-600">
                                           {it.title}
                                         </div>
                                         {it.video_url ? (
@@ -378,18 +571,17 @@ export default function DashboardPage() {
                                         )}
                                       </button>
 
-                                      <div className="mt-2 flex items-center justify-between">
+                                      <div className="mt-3 flex items-center justify-between gap-3">
                                         <span
-                                          className={`text-sm px-3 py-1.5 rounded-lg border ${
+                                          className={`rounded-full border px-3 py-1.5 text-sm ${
                                             cleared
-                                              ? "text-green-400 border-green-600"
-                                              : "text-gray-300 border-gray-600"
+                                              ? "border-green-600 text-green-400"
+                                              : "border-gray-600 text-gray-300"
                                           }`}
                                         >
                                           {cleared ? "✅ クリア" : "⬜ 未クリア"}
                                         </span>
 
-                                        {/* 任意：更新日時（今のまま残す） */}
                                         {it.status?.cleared_at ? (
                                           <span className="text-xs text-gray-500">
                                             {new Date(it.status.cleared_at).toLocaleString()}
@@ -415,71 +607,205 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* QRモーダル（既存のまま） */}
+      {/* Student Switcher */}
+      {showStudentSwitcher && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center"
+          onClick={() => setShowStudentSwitcher(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">student切り替え</h2>
+              <button
+                onClick={() => setShowStudentSwitcher(false)}
+                className="rounded-lg bg-gray-800 px-3 py-1.5"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {students.map((student) => {
+                const active = student.id === selectedStudentId;
+
+                return (
+                  <button
+                    key={student.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedStudentId(student.id);
+                      setShowStudentSwitcher(false);
+                    }}
+                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                      active
+                        ? "border-indigo-500 bg-indigo-500/10 text-white"
+                        : "border-gray-800 bg-gray-900/50 text-gray-200 hover:bg-gray-800"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium">{student.name_romaji}</span>
+                      {active && <span className="text-xs text-indigo-300">現在表示中</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={() => {
+                setShowStudentSwitcher(false);
+                setShowAddStudent(true);
+              }}
+              className="mt-4 w-full rounded-2xl bg-indigo-600 px-4 py-3 font-medium"
+            >
+              ＋ studentを追加
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Student */}
+      {showAddStudent && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center"
+          onClick={() => setShowAddStudent(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">student追加</h2>
+              <button
+                onClick={() => setShowAddStudent(false)}
+                className="rounded-lg bg-gray-800 px-3 py-1.5"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <input
+                type="text"
+                placeholder="student名（例: jiro）"
+                value={newStudentName}
+                onChange={(e) => setNewStudentName(e.target.value)}
+                className="w-full rounded-2xl bg-gray-900 px-4 py-3 text-white outline-none ring-1 ring-gray-800 placeholder:text-gray-500 focus:ring-indigo-500"
+              />
+
+              <input
+                type="password"
+                placeholder="招待コード"
+                value={newStudentInviteCode}
+                onChange={(e) => setNewStudentInviteCode(e.target.value)}
+                className="w-full rounded-2xl bg-gray-900 px-4 py-3 text-white outline-none ring-1 ring-gray-800 placeholder:text-gray-500 focus:ring-indigo-500"
+              />
+
+              <p className="text-xs text-gray-500">最大3人まで追加できます。</p>
+
+              {addStudentMsg && <p className="text-sm text-yellow-300">{addStudentMsg}</p>}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setShowAddStudent(false)}
+                className="rounded-2xl bg-gray-800 px-4 py-3"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleAddStudent}
+                disabled={addingStudent}
+                className="rounded-2xl bg-indigo-600 px-4 py-3 font-medium disabled:opacity-50"
+              >
+                {addingStudent ? "追加中..." : "追加する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR */}
       {showQr && (
         <div
-          className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 sm:items-center"
           onClick={() => setShowQr(false)}
         >
           <div
-            className="w-full sm:max-w-md bg-gray-950 border border-gray-800 rounded-t-2xl sm:rounded-2xl p-5"
+            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">あなたのQR</h2>
-              <button onClick={() => setShowQr(false)} className="px-3 py-1.5 rounded-lg bg-gray-800">
+              <h2 className="text-lg font-semibold">
+                {selectedStudent?.name_romaji || "student"} のQR
+              </h2>
+              <button
+                onClick={() => setShowQr(false)}
+                className="rounded-lg bg-gray-800 px-3 py-1.5"
+              >
                 ×
               </button>
             </div>
 
             <div className="mt-3 space-y-2">
-              <p className="text-xs text-gray-400 break-all">{qrUrl}</p>
+              <p className="break-all text-xs text-gray-400">{qrUrl}</p>
 
-              <button onClick={copyQrUrl} className="w-full px-4 py-2.5 bg-gray-800 rounded-xl text-sm">
+              <button
+                onClick={copyQrUrl}
+                className="w-full rounded-2xl bg-gray-800 px-4 py-2.5 text-sm"
+              >
                 URLをコピー
               </button>
               {copyMsg && <p className="text-xs text-yellow-300">{copyMsg}</p>}
             </div>
 
-            <div className="mt-4 bg-white rounded-xl p-4 w-fit mx-auto">
+            <div className="mx-auto mt-4 w-fit rounded-xl bg-white p-4">
               <QRCodeCanvas value={qrUrl} size={260} />
             </div>
 
-            <p className="text-xs text-gray-500 mt-3">
-              インストラクターがこのQRをスキャンすると、生徒の進捗ページに移動します。
+            <p className="mt-3 text-xs text-gray-500">
+              インストラクターがこのQRをスキャンすると、このstudentの進捗ページに移動します。
             </p>
 
-            <button onClick={() => setShowQr(false)} className="mt-4 w-full px-4 py-3 bg-gray-700 rounded-xl">
+            <button
+              onClick={() => setShowQr(false)}
+              className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3"
+            >
               閉じる
             </button>
           </div>
         </div>
       )}
 
-      {/* ✅ 動画モーダル（QRと同じ感じ） */}
+      {/* Video */}
       {showVideo && (
         <div
-          className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 sm:items-center"
           onClick={() => setShowVideo(false)}
         >
           <div
-            className="w-full sm:max-w-md bg-gray-950 border border-gray-800 rounded-t-2xl sm:rounded-2xl p-5"
+            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold line-clamp-2">{videoTitle || "動画"}</h2>
-              <button onClick={() => setShowVideo(false)} className="px-3 py-1.5 rounded-lg bg-gray-800">
+              <h2 className="line-clamp-2 text-lg font-semibold">{videoTitle || "動画"}</h2>
+              <button
+                onClick={() => setShowVideo(false)}
+                className="rounded-lg bg-gray-800 px-3 py-1.5"
+              >
                 ×
               </button>
             </div>
 
             <div className="mt-4">
               {videoEmbedUrl ? (
-                <div className="w-full overflow-hidden rounded-xl border border-gray-800 bg-black">
-                  {/* 16:9 */}
+                <div className="overflow-hidden rounded-xl border border-gray-800 bg-black">
                   <div className="relative w-full" style={{ paddingTop: "56.25%" }}>
                     <iframe
-                      className="absolute inset-0 w-full h-full"
+                      className="absolute inset-0 h-full w-full"
                       src={videoEmbedUrl}
                       title={videoTitle || "YouTube video"}
                       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -492,7 +818,10 @@ export default function DashboardPage() {
               )}
             </div>
 
-            <button onClick={() => setShowVideo(false)} className="mt-4 w-full px-4 py-3 bg-gray-700 rounded-xl">
+            <button
+              onClick={() => setShowVideo(false)}
+              className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3"
+            >
               閉じる
             </button>
           </div>
