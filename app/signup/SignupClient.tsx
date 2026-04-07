@@ -98,7 +98,7 @@ export default function SignupPage() {
 
         <input
           type="text"
-          placeholder="User名 例: Ryo"
+          placeholder="User名 例: タナカ タロウ"
           value={nameRomaji}
           onChange={(e) => setNameRomaji(e.target.value)}
           className="w-full p-3 rounded bg-gray-800"
@@ -107,7 +107,7 @@ export default function SignupPage() {
         {/* ✅ 招待コード入力を追加 */}
         <input
           type="password"
-          placeholder="招待コード（共有パスワード）"
+          placeholder="招待コード インストラクターが入力"
           value={inviteCode}
           onChange={(e) => setInviteCode(e.target.value)}
           className="w-full p-3 rounded bg-gray-800"
