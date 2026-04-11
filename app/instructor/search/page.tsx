@@ -112,7 +112,7 @@ export default function InstructorSearchPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="student名で検索（例: ryo / ayuko）"
+            placeholder="student名で検索（例: ヤマダ タロウ ）"
             className="flex-1 rounded-2xl border border-gray-700 bg-gray-900 px-4 py-3 text-white outline-none placeholder:text-gray-500 focus:border-indigo-500"
           />
           <button
