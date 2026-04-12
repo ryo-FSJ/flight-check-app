@@ -481,20 +481,20 @@ export default function DashboardPage() {
   <button
     type="button"
     onClick={() => setShowMenu((prev) => !prev)}
-    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-gray-700 bg-gray-900 text-white transition hover:bg-gray-800"
+    className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-700/80 bg-gray-900/80 text-white transition hover:bg-gray-800 active:scale-95"
     aria-label="メニューを開く"
   >
-    <span className="text-xl leading-none">☰</span>
+  <span className="text-lg leading-none">☰</span>
   </button>
 
   {showMenu && (
-    <div className="absolute right-0 z-50 mt-2 w-48 overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 shadow-2xl">
+    <div className="absolute right-0 top-12 z-50 w-52 overflow-hidden rounded-2xl border border-gray-800 bg-gray-950/95 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur">
       <button
         onClick={() => {
           setShowMenu(false);
           setShowStudentSwitcher(true);
         }}
-        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
+        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
       >
         アカウント切り替え
       </button>
@@ -504,7 +504,7 @@ export default function DashboardPage() {
           setShowMenu(false);
           setShowAddStudent(true);
         }}
-        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
+        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
       >
         ＋アカウント追加
       </button>
@@ -514,7 +514,7 @@ export default function DashboardPage() {
           setShowMenu(false);
           setShowQr(true);
         }}
-        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
+        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
       >
         QRを表示
       </button>
@@ -524,7 +524,7 @@ export default function DashboardPage() {
           setShowMenu(false);
           handleLogout();
         }}
-        className="w-full px-4 py-3 text-left text-sm text-red-400 hover:bg-gray-900"
+        className="w-full px-4 py-3 text-left text-sm text-red-400 transition hover:bg-gray-900"
       >
         ログアウト
       </button>
