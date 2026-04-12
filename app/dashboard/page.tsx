@@ -496,7 +496,7 @@ export default function DashboardPage() {
         }}
         className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
       >
-        切り替え
+        アカウント切り替え
       </button>
 
       <button
@@ -506,7 +506,7 @@ export default function DashboardPage() {
         }}
         className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
       >
-        ＋追加
+        ＋アカウント追加
       </button>
 
       <button
