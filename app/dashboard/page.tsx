@@ -452,7 +452,14 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
+  <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
+
+    <div className="flex justify-end mb-4">
+      <button className="text-white text-2xl">
+        ☰
+      </button>
+    </div>
+
       {/* Header */}
       <div className="mb-5 rounded-[1.618rem] border border-gray-800 bg-gray-950/70 px-4 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
