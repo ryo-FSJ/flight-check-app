@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { QRCodeCanvas } from "qrcode.react";
 import { supabase } from "@/lib/supabase";
@@ -43,7 +43,7 @@ type StudentProfileRow = {
 
 type ViewItem = CheckItemRow & { status?: UserItemCheckRow };
 type ViewCategory = CategoryRow & { items: ViewItem[]; progressPct: number };
-type ViewStep = StepRow & { categories: ViewCategory[] };
+type ViewStep = StepRow & { categories: ViewCategory[]; progressPct: number };
 
 function clampPct(n: number) {
   if (Number.isNaN(n)) return 0;
@@ -91,6 +91,15 @@ function toYoutubeEmbedUrl(raw: string): string | null {
   }
 }
 
+function formatJaDateTime(iso?: string | null) {
+  if (!iso) return "-";
+  try {
+    return new Date(iso).toLocaleString("ja-JP");
+  } catch {
+    return iso;
+  }
+}
+
 export default function DashboardPage() {
   const router = useRouter();
 
@@ -110,8 +119,6 @@ export default function DashboardPage() {
   const [checks, setChecks] = useState<UserItemCheckRow[]>([]);
 
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
-  const toggleCat = (catId: string) => setOpenCats((p) => ({ ...p, [catId]: !p[catId] }));
-
   const [showMenu, setShowMenu] = useState(false);
 
   const [showQr, setShowQr] = useState(false);
@@ -129,10 +136,17 @@ export default function DashboardPage() {
   const [addStudentMsg, setAddStudentMsg] = useState("");
   const [addingStudent, setAddingStudent] = useState(false);
 
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
   const selectedStudent = useMemo(
     () => students.find((s) => s.id === selectedStudentId) ?? null,
     [students, selectedStudentId]
   );
+
+  const toggleCat = (catId: string) =>
+    setOpenCats((prev) => ({ ...prev, [catId]: !prev[catId] }));
+
+  const closeMenu = () => setShowMenu(false);
 
   const openVideo = (title: string, url?: string | null) => {
     setVideoMsg("");
@@ -143,7 +157,7 @@ export default function DashboardPage() {
       return;
     }
     if (!embed) {
-      setVideoMsg("YouTubeのURLのみ対応です（watch / youtu.be / shorts / embed）");
+      setVideoMsg("YouTubeのURLのみ対応です");
       return;
     }
 
@@ -151,6 +165,29 @@ export default function DashboardPage() {
     setVideoEmbedUrl(embed);
     setShowVideo(true);
   };
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(event.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowMenu(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   useEffect(() => {
     const fail = (msg: string) => {
@@ -164,6 +201,7 @@ export default function DashboardPage() {
 
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr) return fail(userErr.message);
+
       if (!userData.user) {
         router.replace("/login");
         return;
@@ -195,8 +233,14 @@ export default function DashboardPage() {
           .select("id,owner_user_id,name_romaji,sort_order,created_at")
           .eq("owner_user_id", userId)
           .order("sort_order", { ascending: true }),
-        supabase.from("steps").select("id,name,sort_order").order("sort_order", { ascending: true }),
-        supabase.from("categories").select("id,step_id,name,sort_order").order("sort_order", { ascending: true }),
+        supabase
+          .from("steps")
+          .select("id,name,sort_order")
+          .order("sort_order", { ascending: true }),
+        supabase
+          .from("categories")
+          .select("id,step_id,name,sort_order")
+          .order("sort_order", { ascending: true }),
         supabase
           .from("check_items")
           .select("id,category_id,title,sort_order,video_url")
@@ -213,8 +257,8 @@ export default function DashboardPage() {
 
       const firstStudent = studentList[0];
       if (!firstStudent) return fail("student profile が見つかりません");
-      setSelectedStudentId(firstStudent.id);
 
+      setSelectedStudentId(firstStudent.id);
       setSteps((stepsRes.data ?? []) as StepRow[]);
       setCategories((categoriesRes.data ?? []) as CategoryRow[]);
       setItems((itemsRes.data ?? []) as CheckItemRow[]);
@@ -302,6 +346,10 @@ export default function DashboardPage() {
     };
   }, [selectedStudentId]);
 
+  useEffect(() => {
+    closeMenu();
+  }, [selectedStudentId]);
+
   const viewData: ViewStep[] = useMemo(() => {
     const checkMap = new Map<string, UserItemCheckRow>();
     for (const c of checks) checkMap.set(c.item_id, c);
@@ -325,8 +373,39 @@ export default function DashboardPage() {
       categoriesByStep.set(cat.step_id, list);
     }
 
-    return steps.map((st) => ({ ...st, categories: categoriesByStep.get(st.id) ?? [] }));
+    return steps.map((st) => {
+      const stepCategories = categoriesByStep.get(st.id) ?? [];
+      const totalItems = stepCategories.reduce((sum, c) => sum + c.items.length, 0);
+      const totalCleared = stepCategories.reduce(
+        (sum, c) => sum + c.items.filter((x) => x.status?.is_cleared === true).length,
+        0
+      );
+
+      return {
+        ...st,
+        categories: stepCategories,
+        progressPct: totalItems === 0 ? 0 : clampPct((totalCleared / totalItems) * 100),
+      };
+    });
   }, [steps, categories, items, checks]);
+
+  const totalProgressPct = useMemo(() => {
+    const totalItems = viewData.reduce(
+      (sum, step) => sum + step.categories.reduce((s, cat) => s + cat.items.length, 0),
+      0
+    );
+    const totalCleared = viewData.reduce(
+      (sum, step) =>
+        sum +
+        step.categories.reduce(
+          (s, cat) => s + cat.items.filter((x) => x.status?.is_cleared === true).length,
+          0
+        ),
+      0
+    );
+
+    return totalItems === 0 ? 0 : clampPct((totalCleared / totalItems) * 100);
+  }, [viewData]);
 
   const qrUrl = useMemo(() => {
     const origin =
@@ -344,9 +423,9 @@ export default function DashboardPage() {
     try {
       await navigator.clipboard.writeText(qrUrl);
       setCopyMsg("コピーしました ✅");
-      window.setTimeout(() => setCopyMsg(""), 1500);
+      window.setTimeout(() => setCopyMsg(""), 1600);
     } catch {
-      setCopyMsg("コピーできませんでした（手動で選択してコピーしてね）");
+      setCopyMsg("コピーできませんでした");
     }
   };
 
@@ -434,7 +513,11 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <main className="min-h-[100dvh] bg-black text-white px-4 py-6">
-        <p>読み込み中...</p>
+        <div className="mx-auto max-w-md animate-pulse space-y-4">
+          <div className="h-28 rounded-[1.618rem] border border-gray-800 bg-gray-950/70" />
+          <div className="h-32 rounded-[1.618rem] border border-gray-800 bg-gray-950/55" />
+          <div className="h-32 rounded-[1.618rem] border border-gray-800 bg-gray-950/55" />
+        </div>
       </main>
     );
   }
@@ -442,423 +525,476 @@ export default function DashboardPage() {
   if (errorMsg) {
     return (
       <main className="min-h-[100dvh] bg-black text-white px-4 py-6">
-        <p className="text-red-400">エラー: {errorMsg}</p>
-        <button
-          onClick={() => router.replace("/login")}
-          className="mt-4 w-full px-4 py-3 bg-gray-700 rounded-2xl"
-        >
-          ログインへ
-        </button>
+        <div className="mx-auto max-w-md rounded-[1.618rem] border border-red-900/60 bg-red-950/20 p-5">
+          <p className="text-sm text-red-300">エラー: {errorMsg}</p>
+          <button
+            onClick={() => router.replace("/login")}
+            className="mt-4 w-full rounded-2xl bg-gray-800 px-4 py-3 text-sm font-medium"
+          >
+            ログインへ
+          </button>
+        </div>
       </main>
     );
   }
 
   return (
-  <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
-
-      {/* Header */}
-      <div className="mb-5 rounded-[1.618rem] border border-gray-800 bg-gray-950/70 px-4 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-2">
-            <div className="space-y-1">
-              <p className="text-[0.72rem] uppercase tracking-[0.22em] text-gray-500">
-                Flight Check
-              </p>
-
-              <h1 className="text-[1.9rem] leading-none font-bold">Dashboard</h1>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
-              {/* <span>role: {myRole ?? "-"}</span> */}
-              <span>owner: {myNameRomaji || "-"}</span>
-              <span>student: {selectedStudent?.name_romaji ?? "-"}</span>
-            </div>
-
-            {videoMsg && <p className="text-xs text-yellow-300">{videoMsg}</p>}
-          </div>
-
-          <div className="relative self-end sm:self-start">
-  <button
-    type="button"
-    onClick={() => setShowMenu((prev) => !prev)}
-    className="flex h-10 w-10 items-center justify-center rounded-xl border border-gray-700/80 bg-gray-900/80 text-white transition hover:bg-gray-800 active:scale-95"
-    aria-label="メニューを開く"
-  >
-  <span className="text-lg leading-none">☰</span>
-  </button>
-
-  {showMenu && (
-    <div className="absolute right-0 top-12 z-50 w-52 overflow-hidden rounded-2xl border border-gray-800 bg-gray-950/95 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur">
-      <button
-        onClick={() => {
-          setShowMenu(false);
-          setShowStudentSwitcher(true);
-        }}
-        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
-      >
-        アカウント切り替え
-      </button>
-
-      <button
-        onClick={() => {
-          setShowMenu(false);
-          setShowAddStudent(true);
-        }}
-        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
-      >
-        ＋アカウント追加
-      </button>
-
-      <button
-        onClick={() => {
-          setShowMenu(false);
-          setShowQr(true);
-        }}
-        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
-      >
-        QRを表示
-      </button>
-
-      <button
-        onClick={() => {
-          setShowMenu(false);
-          handleLogout();
-        }}
-        className="w-full px-4 py-3 text-left text-sm text-red-400 transition hover:bg-gray-900"
-      >
-        ログアウト
-      </button>
-    </div>
-  )}
-</div>
-        </div>
-      </div>
-
-      {/* Content */}
-      {viewData.length === 0 ? (
-        <p className="text-gray-300">データがありません（steps が空かも）</p>
-      ) : (
-        <div className="space-y-6">
-          {viewData.map((step) => (
-            <section
-              key={step.id}
-              className="rounded-[1.618rem] border border-gray-800 bg-gray-950/55 px-4 py-4"
-            >
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h2 className="text-[1.35rem] font-semibold tracking-tight">{step.name}</h2>
+    <main className="min-h-[100dvh] bg-black text-white px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-md space-y-5 sm:max-w-4xl">
+        <section className="rounded-[1.618rem] border border-gray-800 bg-gray-950/70 px-4 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="space-y-1">
+                <p className="text-[0.68rem] uppercase tracking-[0.24em] text-gray-500">
+                  Flight Check
+                </p>
+                <h1 className="text-[2rem] leading-none font-bold tracking-tight">Dashboard</h1>
               </div>
 
-              {step.categories.length === 0 ? (
-                <p className="text-gray-400">このStepにカテゴリがありません</p>
-              ) : (
-                <div className="space-y-4">
-                  {step.categories.map((cat) => {
-                    const isOpen = !!openCats[cat.id];
+              <div className="flex flex-wrap items-center gap-2 text-[0.78rem] text-gray-400">
+                <span className="rounded-full border border-gray-800 bg-gray-900/70 px-2.5 py-1">
+                  owner: {myNameRomaji || "-"}
+                </span>
+                <span className="rounded-full border border-gray-800 bg-gray-900/70 px-2.5 py-1">
+                  student: {selectedStudent?.name_romaji ?? "-"}
+                </span>
+                <span className="rounded-full border border-indigo-900/70 bg-indigo-950/40 px-2.5 py-1 text-indigo-200">
+                  progress: {totalProgressPct}%
+                </span>
+              </div>
 
+              {students.length > 1 && (
+                <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {students.map((student) => {
+                    const active = student.id === selectedStudentId;
                     return (
-                      <div
-                        key={cat.id}
-                        className="rounded-[1.272rem] border border-gray-800/90 bg-gray-900/45 px-4 py-4"
+                      <button
+                        key={student.id}
+                        type="button"
+                        onClick={() => setSelectedStudentId(student.id)}
+                        className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                          active
+                            ? "border-indigo-500 bg-indigo-500/15 text-white"
+                            : "border-gray-800 bg-gray-900/60 text-gray-300"
+                        }`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => toggleCat(cat.id)}
-                          className="flex w-full items-center justify-between gap-3 text-left"
-                        >
-                          <div className="flex min-w-0 items-center gap-3">
-                            <h3 className="truncate text-[1.06rem] font-semibold">{cat.name}</h3>
-                            <span className="rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
-                              {cat.progressPct}%
-                            </span>
-                          </div>
-                          <span className="text-sm text-gray-400">{isOpen ? "▲" : "▼"}</span>
-                        </button>
-
-                        {isOpen && (
-                          <div className="mt-4">
-                            {cat.items.length === 0 ? (
-                              <p className="text-gray-400">このカテゴリに項目がありません</p>
-                            ) : (
-                              <ul className="space-y-3">
-                                {cat.items.map((it) => {
-                                  const cleared = it.status?.is_cleared === true;
-
-                                  return (
-                                    <li
-                                      key={it.id}
-                                      className="rounded-[1rem] border border-gray-800 bg-black/25 px-4 py-4"
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => openVideo(it.title, it.video_url)}
-                                        className="w-full text-left"
-                                      >
-                                        <div className="text-[1rem] leading-[1.62] font-medium whitespace-pre-wrap underline underline-offset-4 decoration-gray-600">
-                                          {it.title}
-                                        </div>
-                                        {it.video_url ? (
-                                          <p className="mt-1 text-xs text-gray-500">動画あり</p>
-                                        ) : (
-                                          <p className="mt-1 text-xs text-gray-700">動画なし</p>
-                                        )}
-                                      </button>
-
-                                      <div className="mt-3 flex items-center justify-between gap-3">
-                                        <span
-                                          className={`rounded-full border px-3 py-1.5 text-sm ${
-                                            cleared
-                                              ? "border-green-600 text-green-400"
-                                              : "border-gray-600 text-gray-300"
-                                          }`}
-                                        >
-                                          {cleared ? "✅ クリア" : "⬜ 未クリア"}
-                                        </span>
-
-                                        {it.status?.cleared_at ? (
-                                          <span className="text-xs text-gray-500">
-                                            {new Date(it.status.cleared_at).toLocaleString()}
-                                          </span>
-                                        ) : (
-                                          <span className="text-xs text-gray-600">-</span>
-                                        )}
-                                      </div>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                        {student.name_romaji}
+                      </button>
                     );
                   })}
                 </div>
               )}
-            </section>
-          ))}
-        </div>
-      )}
 
-      {/* Student Switcher */}
-      {showStudentSwitcher && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center"
-          onClick={() => setShowStudentSwitcher(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">student切り替え</h2>
-              <button
-                onClick={() => setShowStudentSwitcher(false)}
-                className="rounded-lg bg-gray-800 px-3 py-1.5"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              {students.map((student) => {
-                const active = student.id === selectedStudentId;
-
-                return (
-                  <button
-                    key={student.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedStudentId(student.id);
-                      setShowStudentSwitcher(false);
-                    }}
-                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                      active
-                        ? "border-indigo-500 bg-indigo-500/10 text-white"
-                        : "border-gray-800 bg-gray-900/50 text-gray-200 hover:bg-gray-800"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-medium">{student.name_romaji}</span>
-                      {active && <span className="text-xs text-indigo-300">現在表示中</span>}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={() => {
-                setShowStudentSwitcher(false);
-                setShowAddStudent(true);
-              }}
-              className="mt-4 w-full rounded-2xl bg-indigo-600 px-4 py-3 font-medium"
-            >
-              ＋ studentを追加
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Add Student */}
-      {showAddStudent && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center"
-          onClick={() => setShowAddStudent(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">student追加</h2>
-              <button
-                onClick={() => setShowAddStudent(false)}
-                className="rounded-lg bg-gray-800 px-3 py-1.5"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <input
-                type="text"
-                placeholder="student名（例: jiro）"
-                value={newStudentName}
-                onChange={(e) => setNewStudentName(e.target.value)}
-                className="w-full rounded-2xl bg-gray-900 px-4 py-3 text-white outline-none ring-1 ring-gray-800 placeholder:text-gray-500 focus:ring-indigo-500"
-              />
-
-              <input
-                type="password"
-                placeholder="招待コード"
-                value={newStudentInviteCode}
-                onChange={(e) => setNewStudentInviteCode(e.target.value)}
-                className="w-full rounded-2xl bg-gray-900 px-4 py-3 text-white outline-none ring-1 ring-gray-800 placeholder:text-gray-500 focus:ring-indigo-500"
-              />
-
-              <p className="text-xs text-gray-500">最大3人まで追加できます。</p>
-
-              {addStudentMsg && <p className="text-sm text-yellow-300">{addStudentMsg}</p>}
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setShowAddStudent(false)}
-                className="rounded-2xl bg-gray-800 px-4 py-3"
-              >
-                キャンセル
-              </button>
-              <button
-                onClick={handleAddStudent}
-                disabled={addingStudent}
-                className="rounded-2xl bg-indigo-600 px-4 py-3 font-medium disabled:opacity-50"
-              >
-                {addingStudent ? "追加中..." : "追加する"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* QR */}
-      {showQr && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 sm:items-center"
-          onClick={() => setShowQr(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
-                {selectedStudent?.name_romaji || "student"} のQR
-              </h2>
-              <button
-                onClick={() => setShowQr(false)}
-                className="rounded-lg bg-gray-800 px-3 py-1.5"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="mt-3 space-y-2">
-              <p className="break-all text-xs text-gray-400">{qrUrl}</p>
-
-              <button
-                onClick={copyQrUrl}
-                className="w-full rounded-2xl bg-gray-800 px-4 py-2.5 text-sm"
-              >
-                URLをコピー
-              </button>
-              {copyMsg && <p className="text-xs text-yellow-300">{copyMsg}</p>}
-            </div>
-
-            <div className="mx-auto mt-4 w-fit rounded-xl bg-white p-4">
-              <QRCodeCanvas value={qrUrl} size={260} />
-            </div>
-
-            <p className="mt-3 text-xs text-gray-500">
-              インストラクターがこのQRをスキャンすると、このstudentの進捗ページに移動します。
-            </p>
-
-            <button
-              onClick={() => setShowQr(false)}
-              className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3"
-            >
-              閉じる
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Video */}
-      {showVideo && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 sm:items-center"
-          onClick={() => setShowVideo(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 sm:rounded-[1.618rem]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="line-clamp-2 text-lg font-semibold">{videoTitle || "動画"}</h2>
-              <button
-                onClick={() => setShowVideo(false)}
-                className="rounded-lg bg-gray-800 px-3 py-1.5"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="mt-4">
-              {videoEmbedUrl ? (
-                <div className="overflow-hidden rounded-xl border border-gray-800 bg-black">
-                  <div className="relative w-full" style={{ paddingTop: "56.25%" }}>
-                    <iframe
-                      className="absolute inset-0 h-full w-full"
-                      src={videoEmbedUrl}
-                      title={videoTitle || "YouTube video"}
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">動画を表示できませんでした。</p>
+              {videoMsg && (
+                <p className="rounded-2xl border border-yellow-800/60 bg-yellow-950/20 px-3 py-2 text-xs text-yellow-300">
+                  {videoMsg}
+                </p>
               )}
             </div>
 
-            <button
-              onClick={() => setShowVideo(false)}
-              className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3"
-            >
-              閉じる
-            </button>
+            <div ref={menuRef} className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowMenu((prev) => !prev)}
+                className={`flex h-10 w-10 items-center justify-center rounded-xl border text-white transition active:scale-95 ${
+                  showMenu
+                    ? "border-indigo-500 bg-indigo-500/12 shadow-[0_0_0_1px_rgba(99,102,241,0.2)]"
+                    : "border-gray-700/80 bg-gray-900/80 hover:bg-gray-800"
+                }`}
+                aria-label="メニューを開く"
+                aria-expanded={showMenu}
+                aria-haspopup="menu"
+              >
+                <span className="text-lg leading-none">☰</span>
+              </button>
+
+              {showMenu && (
+                <div className="absolute right-0 top-12 z-50 w-52 overflow-hidden rounded-2xl border border-gray-800 bg-gray-950/95 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur">
+                  <button
+                    onClick={() => {
+                      closeMenu();
+                      setShowStudentSwitcher(true);
+                    }}
+                    className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
+                  >
+                    アカウント切り替え
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      closeMenu();
+                      setShowAddStudent(true);
+                    }}
+                    className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
+                  >
+                    ＋アカウント追加
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      closeMenu();
+                      setShowQr(true);
+                    }}
+                    className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white transition hover:bg-gray-900"
+                  >
+                    QRを表示
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      closeMenu();
+                      void handleLogout();
+                    }}
+                    className="w-full px-4 py-3 text-left text-sm text-red-400 transition hover:bg-gray-900"
+                  >
+                    ログアウト
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        </section>
+
+        {viewData.length === 0 ? (
+          <section className="rounded-[1.618rem] border border-gray-800 bg-gray-950/55 px-4 py-5">
+            <p className="text-sm text-gray-300">データがありません（steps が空かも）</p>
+          </section>
+        ) : (
+          <div className="space-y-4">
+            {viewData.map((step) => (
+              <section
+                key={step.id}
+                className="rounded-[1.618rem] border border-gray-800 bg-gray-950/55 px-4 py-4"
+              >
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-[1.32rem] font-semibold tracking-tight">{step.name}</h2>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
+                    {step.progressPct}%
+                  </span>
+                </div>
+
+                {step.categories.length === 0 ? (
+                  <p className="text-sm text-gray-400">このStepにカテゴリがありません</p>
+                ) : (
+                  <div className="space-y-3">
+                    {step.categories.map((cat) => {
+                      const isOpen = !!openCats[cat.id];
+
+                      return (
+                        <div
+                          key={cat.id}
+                          className="rounded-[1.272rem] border border-gray-800/90 bg-gray-900/45 px-4 py-4"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleCat(cat.id)}
+                            className="flex w-full items-center justify-between gap-3 text-left"
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <h3 className="truncate text-[1.02rem] font-semibold">{cat.name}</h3>
+                              <span className="rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
+                                {cat.progressPct}%
+                              </span>
+                            </div>
+                            <span className="text-sm text-gray-400">{isOpen ? "▲" : "▼"}</span>
+                          </button>
+
+                          {isOpen && (
+                            <div className="mt-4">
+                              {cat.items.length === 0 ? (
+                                <p className="text-sm text-gray-400">このカテゴリに項目がありません</p>
+                              ) : (
+                                <ul className="space-y-3">
+                                  {cat.items.map((it) => {
+                                    const cleared = it.status?.is_cleared === true;
+
+                                    return (
+                                      <li
+                                        key={it.id}
+                                        className="rounded-[1rem] border border-gray-800 bg-black/25 px-4 py-4"
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={() => openVideo(it.title, it.video_url)}
+                                          className="w-full text-left"
+                                        >
+                                          <div className="text-[0.98rem] leading-[1.65] font-medium whitespace-pre-wrap underline underline-offset-4 decoration-gray-600">
+                                            {it.title}
+                                          </div>
+
+                                          <p
+                                            className={`mt-1 text-xs ${
+                                              it.video_url ? "text-gray-500" : "text-gray-700"
+                                            }`}
+                                          >
+                                            {it.video_url ? "動画あり" : "動画なし"}
+                                          </p>
+                                        </button>
+
+                                        <div className="mt-3 flex items-center justify-between gap-3">
+                                          <span
+                                            className={`rounded-full border px-3 py-1.5 text-sm ${
+                                              cleared
+                                                ? "border-green-600 text-green-400"
+                                                : "border-gray-600 text-gray-300"
+                                            }`}
+                                          >
+                                            {cleared ? "✅ クリア" : "⬜ 未クリア"}
+                                          </span>
+
+                                          <span
+                                            className={`text-right text-xs ${
+                                              cleared ? "text-gray-500" : "text-gray-600"
+                                            }`}
+                                          >
+                                            {formatJaDateTime(it.status?.cleared_at)}
+                                          </span>
+                                        </div>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
+        )}
+
+        {showStudentSwitcher && (
+          <div
+            className="fixed inset-0 z-[60] flex items-end justify-center bg-black/72 p-3 sm:items-center sm:p-4"
+            onClick={() => setShowStudentSwitcher(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 shadow-2xl sm:rounded-[1.618rem]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">アカウント切り替え</h2>
+                <button
+                  onClick={() => setShowStudentSwitcher(false)}
+                  className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {students.map((student) => {
+                  const active = student.id === selectedStudentId;
+
+                  return (
+                    <button
+                      key={student.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedStudentId(student.id);
+                        setShowStudentSwitcher(false);
+                      }}
+                      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                        active
+                          ? "border-indigo-500 bg-indigo-500/10 text-white"
+                          : "border-gray-800 bg-gray-900/50 text-gray-200 hover:bg-gray-800"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium">{student.name_romaji}</span>
+                        {active && <span className="text-xs text-indigo-300">現在表示中</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={() => {
+                  setShowStudentSwitcher(false);
+                  setShowAddStudent(true);
+                }}
+                className="mt-4 w-full rounded-2xl bg-indigo-600 px-4 py-3 font-medium transition hover:bg-indigo-500"
+              >
+                ＋ studentを追加
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showAddStudent && (
+          <div
+            className="fixed inset-0 z-[60] flex items-end justify-center bg-black/72 p-3 sm:items-center sm:p-4"
+            onClick={() => setShowAddStudent(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 shadow-2xl sm:rounded-[1.618rem]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">student追加</h2>
+                <button
+                  onClick={() => setShowAddStudent(false)}
+                  className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  placeholder="student名（例: jiro）"
+                  value={newStudentName}
+                  onChange={(e) => setNewStudentName(e.target.value)}
+                  className="w-full rounded-2xl bg-gray-900 px-4 py-3 text-white outline-none ring-1 ring-gray-800 placeholder:text-gray-500 focus:ring-indigo-500"
+                />
+
+                <input
+                  type="password"
+                  placeholder="招待コード"
+                  value={newStudentInviteCode}
+                  onChange={(e) => setNewStudentInviteCode(e.target.value)}
+                  className="w-full rounded-2xl bg-gray-900 px-4 py-3 text-white outline-none ring-1 ring-gray-800 placeholder:text-gray-500 focus:ring-indigo-500"
+                />
+
+                <p className="text-xs text-gray-500">最大3人まで追加できます。</p>
+
+                {addStudentMsg && (
+                  <p className="rounded-2xl border border-yellow-800/60 bg-yellow-950/20 px-3 py-2 text-sm text-yellow-300">
+                    {addStudentMsg}
+                  </p>
+                )}
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setShowAddStudent(false)}
+                  className="rounded-2xl bg-gray-800 px-4 py-3 text-sm font-medium"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleAddStudent}
+                  disabled={addingStudent}
+                  className="rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-medium transition disabled:opacity-50"
+                >
+                  {addingStudent ? "追加中..." : "追加する"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showQr && (
+          <div
+            className="fixed inset-0 z-[60] flex items-end justify-center bg-black/72 p-3 sm:items-center sm:p-4"
+            onClick={() => setShowQr(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 shadow-2xl sm:rounded-[1.618rem]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">
+                  {selectedStudent?.name_romaji || "student"} のQR
+                </h2>
+                <button
+                  onClick={() => setShowQr(false)}
+                  className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                <p className="break-all text-xs text-gray-400">{qrUrl}</p>
+
+                <button
+                  onClick={copyQrUrl}
+                  className="w-full rounded-2xl bg-gray-800 px-4 py-2.5 text-sm font-medium"
+                >
+                  URLをコピー
+                </button>
+
+                {copyMsg && (
+                  <p className="rounded-2xl border border-yellow-800/60 bg-yellow-950/20 px-3 py-2 text-xs text-yellow-300">
+                    {copyMsg}
+                  </p>
+                )}
+              </div>
+
+              <div className="mx-auto mt-4 w-fit rounded-2xl bg-white p-4">
+                <QRCodeCanvas value={qrUrl} size={236} />
+              </div>
+
+              <p className="mt-3 text-xs leading-5 text-gray-500">
+                インストラクターがこのQRをスキャンすると、このstudentの進捗ページに移動します。
+              </p>
+
+              <button
+                onClick={() => setShowQr(false)}
+                className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3 text-sm font-medium"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showVideo && (
+          <div
+            className="fixed inset-0 z-[60] flex items-end justify-center bg-black/72 p-3 sm:items-center sm:p-4"
+            onClick={() => setShowVideo(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-[1.618rem] border border-gray-800 bg-gray-950 p-5 shadow-2xl sm:max-w-2xl sm:rounded-[1.618rem]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="line-clamp-2 text-lg font-semibold">{videoTitle || "動画"}</h2>
+                <button
+                  onClick={() => setShowVideo(false)}
+                  className="rounded-xl bg-gray-800 px-3 py-1.5 text-sm"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="mt-4">
+                {videoEmbedUrl ? (
+                  <div className="overflow-hidden rounded-2xl border border-gray-800 bg-black">
+                    <div className="relative w-full" style={{ paddingTop: "56.25%" }}>
+                      <iframe
+                        className="absolute inset-0 h-full w-full"
+                        src={videoEmbedUrl}
+                        title={videoTitle || "YouTube video"}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400">動画を表示できませんでした。</p>
+                )}
+              </div>
+
+              <button
+                onClick={() => setShowVideo(false)}
+                className="mt-4 w-full rounded-2xl bg-gray-700 px-4 py-3 text-sm font-medium"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </main>
   );
 }
