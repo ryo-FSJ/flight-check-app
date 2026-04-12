@@ -112,6 +112,8 @@ export default function DashboardPage() {
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
   const toggleCat = (catId: string) => setOpenCats((p) => ({ ...p, [catId]: !p[catId] }));
 
+  const [showMenu, setShowMenu] = useState(false);
+
   const [showQr, setShowQr] = useState(false);
   const [copyMsg, setCopyMsg] = useState("");
 
@@ -454,12 +456,6 @@ export default function DashboardPage() {
   return (
   <main className="min-h-[100dvh] bg-black text-white px-4 py-5 sm:px-6 sm:py-6">
 
-    <div className="flex justify-end mb-4">
-      <button className="text-white text-2xl">
-        ☰
-      </button>
-    </div>
-
       {/* Header */}
       <div className="mb-5 rounded-[1.618rem] border border-gray-800 bg-gray-950/70 px-4 py-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -468,6 +464,7 @@ export default function DashboardPage() {
               <p className="text-[0.72rem] uppercase tracking-[0.22em] text-gray-500">
                 Flight Check
               </p>
+
               <h1 className="text-[1.9rem] leading-none font-bold">Dashboard</h1>
             </div>
 
@@ -480,32 +477,60 @@ export default function DashboardPage() {
             {videoMsg && <p className="text-xs text-yellow-300">{videoMsg}</p>}
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
-            <button
-              onClick={() => setShowStudentSwitcher(true)}
-              className="rounded-2xl bg-gray-800 px-4 py-2.5 text-sm font-medium transition hover:bg-gray-700"
-            >
-              切り替え
-            </button>
-            <button
-              onClick={() => setShowAddStudent(true)}
-              className="rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-medium transition hover:bg-indigo-500"
-            >
-              ＋追加
-            </button>
-            <button
-              onClick={() => setShowQr(true)}
-              className="rounded-2xl bg-gray-700 px-4 py-2.5 text-sm font-medium transition hover:bg-gray-600"
-            >
-              QRを表示
-            </button>
-            <button
-              onClick={handleLogout}
-              className="rounded-2xl bg-red-600 px-4 py-2.5 text-sm font-medium transition hover:bg-red-500"
-            >
-              ログアウト
-            </button>
-          </div>
+          <div className="relative self-end sm:self-start">
+  <button
+    type="button"
+    onClick={() => setShowMenu((prev) => !prev)}
+    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-gray-700 bg-gray-900 text-white transition hover:bg-gray-800"
+    aria-label="メニューを開く"
+  >
+    <span className="text-xl leading-none">☰</span>
+  </button>
+
+  {showMenu && (
+    <div className="absolute right-0 z-50 mt-2 w-48 overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 shadow-2xl">
+      <button
+        onClick={() => {
+          setShowMenu(false);
+          setShowStudentSwitcher(true);
+        }}
+        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
+      >
+        切り替え
+      </button>
+
+      <button
+        onClick={() => {
+          setShowMenu(false);
+          setShowAddStudent(true);
+        }}
+        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
+      >
+        ＋追加
+      </button>
+
+      <button
+        onClick={() => {
+          setShowMenu(false);
+          setShowQr(true);
+        }}
+        className="w-full border-b border-gray-800 px-4 py-3 text-left text-sm text-white hover:bg-gray-900"
+      >
+        QRを表示
+      </button>
+
+      <button
+        onClick={() => {
+          setShowMenu(false);
+          handleLogout();
+        }}
+        className="w-full px-4 py-3 text-left text-sm text-red-400 hover:bg-gray-900"
+      >
+        ログアウト
+      </button>
+    </div>
+  )}
+</div>
         </div>
       </div>
 
