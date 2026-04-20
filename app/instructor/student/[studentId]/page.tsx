@@ -22,6 +22,7 @@ type UserItemCheckRow = {
   user_id: string;
   student_profile_id: string | null;
   is_cleared: boolean;
+  rating: "S" | "A" | "B" | "C" | null;
   cleared_at: string | null;
   cleared_by: string | null;
 };
@@ -257,7 +258,7 @@ export default function InstructorStudentPage() {
           .order("sort_order", { ascending: true }),
         supabase
           .from("user_item_checks")
-          .select("item_id,user_id,student_profile_id,is_cleared,cleared_at,cleared_by")
+          .select("item_id,user_id,student_profile_id,is_cleared,rating,cleared_at,cleared_by")
           .eq("student_profile_id", studentId),
       ]);
 
@@ -382,7 +383,7 @@ export default function InstructorStudentPage() {
     for (const cat of categories) {
       const categoryItems = itemsByCategory.get(cat.id) ?? [];
       const total = categoryItems.length;
-      const cleared = categoryItems.filter((x) => x.status?.is_cleared === true).length;
+      const cleared = categoryItems.filter((x) => x.status?.rating != null).length;
       const pct = total === 0 ? 0 : clampPct((cleared / total) * 100);
 
       const list = categoriesByStep.get(cat.step_id) ?? [];
@@ -394,7 +395,7 @@ export default function InstructorStudentPage() {
       const stepCategories = categoriesByStep.get(st.id) ?? [];
       const totalItems = stepCategories.reduce((sum, cat) => sum + cat.items.length, 0);
       const totalCleared = stepCategories.reduce(
-        (sum, cat) => sum + cat.items.filter((x) => x.status?.is_cleared === true).length,
+        (sum, cat) => sum + cat.items.filter((x) => x.status?.rating != null).length,
         0
       );
 
@@ -415,7 +416,7 @@ export default function InstructorStudentPage() {
       (sum, step) =>
         sum +
         step.categories.reduce(
-          (s, cat) => s + cat.items.filter((x) => x.status?.is_cleared === true).length,
+          (s, cat) => s + cat.items.filter((x) => x.status?.rating != null).length,
           0
         ),
       0
@@ -424,7 +425,7 @@ export default function InstructorStudentPage() {
     return totalItems === 0 ? 0 : clampPct((totalCleared / totalItems) * 100);
   }, [viewData]);
 
-  const toggleClear = async (itemId: string, nextCleared: boolean) => {
+  const setRating = async (itemId: string, nextRating: UserItemCheckRow["rating"]) => {
     if (!canEdit) return;
     setErrorMsg("");
 
@@ -442,12 +443,14 @@ export default function InstructorStudentPage() {
 
     const instructorId = userData.user.id;
     const prevChecks = checks;
+    const nextCleared = nextRating != null;
 
     const nextRow: UserItemCheckRow = {
       user_id: studentOwnerUserId,
       student_profile_id: studentId,
       item_id: itemId,
       is_cleared: nextCleared,
+      rating: nextRating,
       cleared_at: nextCleared ? new Date().toISOString() : null,
       cleared_by: nextCleared ? instructorId : null,
     };
@@ -471,7 +474,7 @@ export default function InstructorStudentPage() {
     const { data, error } = await supabase
       .from("user_item_checks")
       .upsert(nextRow, { onConflict: "student_profile_id,item_id" })
-      .select("item_id,user_id,student_profile_id,is_cleared,cleared_at,cleared_by")
+      .select("item_id,user_id,student_profile_id,is_cleared,rating,cleared_at,cleared_by")
       .single();
 
     if (error) {
@@ -632,7 +635,7 @@ export default function InstructorStudentPage() {
                               ) : (
                                 <ul className="space-y-3">
                                   {cat.items.map((it) => {
-                                    const cleared = it.status?.is_cleared === true;
+                                    const rating = it.status?.rating ?? null;
 
                                     return (
                                       <li
@@ -658,27 +661,39 @@ export default function InstructorStudentPage() {
                                         </button>
 
                                         <div className="mt-3 flex items-center justify-between gap-3">
-                                          <span
-                                            className={`rounded-full border px-3 py-1.5 text-sm ${
-                                              cleared
-                                                ? "border-green-600 text-green-400"
-                                                : "border-gray-600 text-gray-300"
-                                            }`}
-                                          >
-                                            {cleared ? "✅ クリア" : "⬜ 未クリア"}
-                                          </span>
+                                          {rating ? (
+                                            <span className="rounded-full border border-green-600 px-3 py-1.5 text-sm text-green-400">
+                                              {rating}
+                                            </span>
+                                          ) : null}
 
-                                          <button
-                                            disabled={!canEdit}
-                                            onClick={() => toggleClear(it.id, !cleared)}
-                                            className={`rounded-2xl px-4 py-2 text-sm font-medium transition active:scale-[0.98] ${
-                                              cleared
-                                                ? "bg-gray-800 text-white hover:bg-gray-700"
-                                                : "bg-blue-600 text-white hover:bg-blue-500"
-                                            } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
-                                          >
-                                            {cleared ? "未クリアに戻す" : "クリアにする"}
-                                          </button>
+                                          <div className="flex flex-wrap justify-end gap-2">
+                                            {(["S", "A", "B", "C"] as const).map((value) => (
+                                              <button
+                                                key={value}
+                                                disabled={!canEdit}
+                                                onClick={() => setRating(it.id, value)}
+                                                className={`rounded-2xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] ${
+                                                  rating === value
+                                                    ? "bg-green-600 text-white hover:bg-green-500"
+                                                    : "bg-gray-800 text-white hover:bg-gray-700"
+                                                } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
+                                              >
+                                                {value}
+                                              </button>
+                                            ))}
+                                            <button
+                                              disabled={!canEdit}
+                                              onClick={() => setRating(it.id, null)}
+                                              className={`rounded-2xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] ${
+                                                rating == null
+                                                  ? "bg-gray-600 text-white hover:bg-gray-500"
+                                                  : "bg-gray-800 text-white hover:bg-gray-700"
+                                              } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
+                                            >
+                                              reset
+                                            </button>
+                                          </div>
                                         </div>
 
                                         {it.status?.cleared_at ? (
