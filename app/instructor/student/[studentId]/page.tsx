@@ -686,7 +686,7 @@ export default function InstructorStudentPage() {
                                                   onClick={() => setRating(it.id, value)}
                                                   className={`rounded-2xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] ${
                                                     rating === value
-                                                      ? "bg-green-600 text-white hover:bg-green-500"
+                                                      ? "bg-blue-600 text-white hover:bg-blue-500"
                                                       : "bg-gray-800 text-white hover:bg-gray-700"
                                                   } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
                                                 >
