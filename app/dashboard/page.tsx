@@ -736,7 +736,7 @@ export default function DashboardPage() {
 
                                         <div className="mt-3 flex items-center justify-between gap-3">
                                           {rating ? (
-                                            <span className="rounded-full border border-green-600 px-3 py-1.5 text-sm text-green-400">
+                                            <span className="text-sm font-bold tracking-wide text-white">
                                               {rating}
                                             </span>
                                           ) : null}
