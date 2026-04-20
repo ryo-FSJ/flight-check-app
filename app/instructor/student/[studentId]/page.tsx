@@ -138,6 +138,7 @@ export default function InstructorStudentPage() {
   const [checks, setChecks] = useState<UserItemCheckRow[]>([]);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
 
+  const [openSteps, setOpenSteps] = useState<Record<string, boolean>>({});
   const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
   const [showVideo, setShowVideo] = useState(false);
   const [videoTitle, setVideoTitle] = useState("");
@@ -146,6 +147,8 @@ export default function InstructorStudentPage() {
 
   const toggleCat = (catId: string) =>
     setOpenCats((prev) => ({ ...prev, [catId]: !prev[catId] }));
+  const toggleStep = (stepId: string) =>
+    setOpenSteps((prev) => ({ ...prev, [stepId]: !prev[stepId] }));
 
   const openVideo = (title: string, url?: string | null) => {
     setVideoMsg("");
@@ -595,127 +598,135 @@ export default function InstructorStudentPage() {
                 key={step.id}
                 className="rounded-[1.618rem] border border-gray-800 bg-gray-950/55 px-4 py-4"
               >
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <h2 className="text-[1.32rem] font-semibold tracking-tight">{step.name}</h2>
-                  <span className="shrink-0 rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
-                    {step.progressPct}%
-                  </span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleStep(step.id)}
+                  className="mb-4 flex w-full items-center justify-between gap-3 text-left"
+                >
+                  <div className="min-w-0 flex items-center gap-3">
+                    <h2 className="text-[1.32rem] font-semibold tracking-tight">{step.name}</h2>
+                    <span className="shrink-0 rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
+                      {step.progressPct}%
+                    </span>
+                  </div>
+                  <span className="text-sm text-gray-400">{openSteps[step.id] ? "▲" : "▼"}</span>
+                </button>
 
-                {step.categories.length === 0 ? (
-                  <p className="text-sm text-gray-400">このStepにカテゴリがありません</p>
-                ) : (
-                  <div className="space-y-3">
-                    {step.categories.map((cat) => {
-                      const isOpen = !!openCats[cat.id];
+                {openSteps[step.id] &&
+                  (step.categories.length === 0 ? (
+                    <p className="text-sm text-gray-400">このStepにカテゴリがありません</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {step.categories.map((cat) => {
+                        const isOpen = !!openCats[cat.id];
 
-                      return (
-                        <div
-                          key={cat.id}
-                          className="rounded-[1.272rem] border border-gray-800/90 bg-gray-900/45 px-4 py-4"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => toggleCat(cat.id)}
-                            className="flex w-full items-center justify-between gap-3 text-left"
+                        return (
+                          <div
+                            key={cat.id}
+                            className="rounded-[1.272rem] border border-gray-800/90 bg-gray-900/45 px-4 py-4"
                           >
-                            <div className="flex min-w-0 items-center gap-3">
-                              <h3 className="truncate text-[1.02rem] font-semibold">{cat.name}</h3>
-                              <span className="rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
-                                {cat.progressPct}%
-                              </span>
-                            </div>
-                            <span className="text-sm text-gray-400">{isOpen ? "▲" : "▼"}</span>
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleCat(cat.id)}
+                              className="flex w-full items-center justify-between gap-3 text-left"
+                            >
+                              <div className="flex min-w-0 items-center gap-3">
+                                <h3 className="truncate text-[1.02rem] font-semibold">{cat.name}</h3>
+                                <span className="rounded-full border border-gray-700 px-2.5 py-1 text-[0.72rem] text-gray-300">
+                                  {cat.progressPct}%
+                                </span>
+                              </div>
+                              <span className="text-sm text-gray-400">{isOpen ? "▲" : "▼"}</span>
+                            </button>
 
-                          {isOpen && (
-                            <div className="mt-4">
-                              {cat.items.length === 0 ? (
-                                <p className="text-sm text-gray-400">このカテゴリに項目がありません</p>
-                              ) : (
-                                <ul className="space-y-3">
-                                  {cat.items.map((it) => {
-                                    const rating = it.status?.rating ?? null;
+                            {isOpen && (
+                              <div className="mt-4">
+                                {cat.items.length === 0 ? (
+                                  <p className="text-sm text-gray-400">このカテゴリに項目がありません</p>
+                                ) : (
+                                  <ul className="space-y-3">
+                                    {cat.items.map((it) => {
+                                      const rating = it.status?.rating ?? null;
 
-                                    return (
-                                      <li
-                                        key={it.id}
-                                        className="rounded-[1rem] border border-gray-800 bg-black/25 px-4 py-4"
-                                      >
-                                        <button
-                                          type="button"
-                                          onClick={() => openVideo(it.title, it.video_url)}
-                                          className="w-full text-left"
+                                      return (
+                                        <li
+                                          key={it.id}
+                                          className="rounded-[1rem] border border-gray-800 bg-black/25 px-4 py-4"
                                         >
-                                          <div className="text-[0.98rem] leading-[1.65] font-medium whitespace-pre-wrap underline underline-offset-4 decoration-gray-600">
-                                            {it.title}
-                                          </div>
-
-                                          <p
-                                            className={`mt-1 text-xs ${
-                                              it.video_url ? "text-gray-500" : "text-gray-700"
-                                            }`}
+                                          <button
+                                            type="button"
+                                            onClick={() => openVideo(it.title, it.video_url)}
+                                            className="w-full text-left"
                                           >
-                                            {it.video_url ? "動画あり" : "動画なし"}
-                                          </p>
-                                        </button>
+                                            <div className="text-[0.98rem] leading-[1.65] font-medium whitespace-pre-wrap underline underline-offset-4 decoration-gray-600">
+                                              {it.title}
+                                            </div>
 
-                                        <div className="mt-3 flex items-center justify-between gap-3">
-                                          {rating ? (
-                                            <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white text-sm font-bold text-white">
-                                              {rating}
-                                            </span>
-                                          ) : null}
+                                            <p
+                                              className={`mt-1 text-xs ${
+                                                it.video_url ? "text-gray-500" : "text-gray-700"
+                                              }`}
+                                            >
+                                              {it.video_url ? "動画あり" : "動画なし"}
+                                            </p>
+                                          </button>
 
-                                          <div className="flex flex-wrap justify-end gap-2">
-                                            {(["S", "A", "B", "C"] as const).map((value) => (
+                                          <div className="mt-3 flex items-center justify-between gap-3">
+                                            {rating ? (
+                                              <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white text-sm font-bold text-white">
+                                                {rating}
+                                              </span>
+                                            ) : null}
+
+                                            <div className="flex flex-wrap justify-end gap-2">
+                                              {(["S", "A", "B", "C"] as const).map((value) => (
+                                                <button
+                                                  key={value}
+                                                  disabled={!canEdit}
+                                                  onClick={() => setRating(it.id, value)}
+                                                  className={`rounded-2xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] ${
+                                                    rating === value
+                                                      ? "bg-green-600 text-white hover:bg-green-500"
+                                                      : "bg-gray-800 text-white hover:bg-gray-700"
+                                                  } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
+                                                >
+                                                  {value}
+                                                </button>
+                                              ))}
                                               <button
-                                                key={value}
                                                 disabled={!canEdit}
-                                                onClick={() => setRating(it.id, value)}
+                                                onClick={() => setRating(it.id, null)}
                                                 className={`rounded-2xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] ${
-                                                  rating === value
-                                                    ? "bg-green-600 text-white hover:bg-green-500"
+                                                  rating == null
+                                                    ? "bg-gray-600 text-white hover:bg-gray-500"
                                                     : "bg-gray-800 text-white hover:bg-gray-700"
                                                 } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
                                               >
-                                                {value}
+                                                reset
                                               </button>
-                                            ))}
-                                            <button
-                                              disabled={!canEdit}
-                                              onClick={() => setRating(it.id, null)}
-                                              className={`rounded-2xl px-3 py-2 text-sm font-medium transition active:scale-[0.98] ${
-                                                rating == null
-                                                  ? "bg-gray-600 text-white hover:bg-gray-500"
-                                                  : "bg-gray-800 text-white hover:bg-gray-700"
-                                              } ${!canEdit ? "cursor-not-allowed opacity-50" : ""}`}
-                                            >
-                                              reset
-                                            </button>
+                                            </div>
                                           </div>
-                                        </div>
 
-                                        {it.status?.cleared_at ? (
-                                          <p className="mt-2 text-xs leading-5 text-gray-500">
-                                            Last update: {it.actorName ?? "Unknown"} /{" "}
-                                            {formatJaDateTime(it.status.cleared_at)}
-                                          </p>
-                                        ) : (
-                                          <p className="mt-2 text-xs text-gray-600">Last update: -</p>
-                                        )}
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                                          {it.status?.cleared_at ? (
+                                            <p className="mt-2 text-xs leading-5 text-gray-500">
+                                              Last update: {it.actorName ?? "Unknown"} /{" "}
+                                              {formatJaDateTime(it.status.cleared_at)}
+                                            </p>
+                                          ) : (
+                                            <p className="mt-2 text-xs text-gray-600">Last update: -</p>
+                                          )}
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
               </section>
             ))}
           </div>
